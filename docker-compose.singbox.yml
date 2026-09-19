@@ -1,0 +1,210 @@
+services:
+  amneziawg:
+    image: amneziavpn/amnezia-wg:latest
+    container_name: amneziawg
+    restart: unless-stopped
+    network_mode: host
+    cap_add:
+      - NET_ADMIN
+      - SYS_MODULE
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    environment:
+      - TZ=Asia/Tehran
+      - LISTEN_PORT=51820
+    volumes:
+      - /opt/amneziawg:/etc/amnezia/amneziawg
+    entrypoint:
+      - /bin/bash
+      - -c
+      - |
+        set -e
+        export TZ="$${TZ:-Asia/Tehran}"
+        if [ -f "/usr/share/zoneinfo/$$TZ" ]; then
+            ln -snf "/usr/share/zoneinfo/$$TZ" /etc/localtime 2>/dev/null || true
+            echo "$$TZ" > /etc/timezone 2>/dev/null || true
+        fi
+
+        mkdir -p /dev/net
+        [ ! -c /dev/net/tun ] && mknod /dev/net/tun c 10 200 2>/dev/null || true
+
+        # Safely attempt IPv4 forwarding without failing on read-only proc
+        if [ -w /proc/sys/net/ipv4/ip_forward ]; then
+            echo 1 > /proc/sys/net/ipv4/ip_forward 2>/dev/null || true
+        fi
+        sysctl -w net.ipv4.ip_forward=1 2>/dev/null || true
+
+        # Ensure iptables is available for NAT masquerading
+        if ! command -v iptables &>/dev/null; then
+            echo "[*] Installing iptables..."
+            if command -v apk &>/dev/null; then
+                apk add --no-cache iptables 2>/dev/null || true
+            elif command -v apt-get &>/dev/null; then
+                apt-get update -qq 2>/dev/null && apt-get install -y -qq iptables 2>/dev/null || true
+            fi
+        fi
+
+        # Discover WireGuard / AmneziaWG binaries
+        WG_BIN=""
+        for b in /usr/bin/awg /usr/bin/wg awg wg; do
+            if command -v "$$b" &>/dev/null; then
+                WG_BIN="$$(command -v "$$b")"
+                break
+            fi
+        done
+
+        WG_QUICK_BIN=""
+        for q in /usr/bin/awg-quick /usr/bin/wg-quick awg-quick wg-quick; do
+            if command -v "$$q" &>/dev/null; then
+                WG_QUICK_BIN="$$(command -v "$$q")"
+                break
+            fi
+        done
+
+        # Ensure cross-compatibility symlinks
+        if [ -n "$$WG_BIN" ]; then
+            [ ! -e /usr/bin/awg ] && ln -sf "$$WG_BIN" /usr/bin/awg 2>/dev/null || true
+            [ ! -e /usr/bin/wg ] && ln -sf "$$WG_BIN" /usr/bin/wg 2>/dev/null || true
+        fi
+
+        if [ -n "$$WG_QUICK_BIN" ]; then
+            [ ! -e /usr/bin/awg-quick ] && ln -sf "$$WG_QUICK_BIN" /usr/bin/awg-quick 2>/dev/null || true
+            [ ! -e /usr/bin/wg-quick ] && ln -sf "$$WG_QUICK_BIN" /usr/bin/wg-quick 2>/dev/null || true
+        fi
+
+        for wggo in /usr/bin/wireguard-go /usr/bin/amneziawg-go wireguard-go amneziawg-go; do
+            if command -v "$$wggo" &>/dev/null; then
+                GO_BIN="$$(command -v "$$wggo")"
+                [ ! -e /usr/bin/wireguard-go ] && ln -sf "$$GO_BIN" /usr/bin/wireguard-go 2>/dev/null || true
+                [ ! -e /usr/bin/amneziawg-go ] && ln -sf "$$GO_BIN" /usr/bin/amneziawg-go 2>/dev/null || true
+                break
+            fi
+        done
+
+        CONFIG_DIR="/etc/amnezia/amneziawg"
+        SERVER_CONF="$$CONFIG_DIR/wg0.conf"
+        CLIENT_CONF="$$CONFIG_DIR/client.conf"
+        SERVER_KEY="$$CONFIG_DIR/server_private_key.txt"
+        SERVER_PUB="$$CONFIG_DIR/server_public_key.txt"
+        CLIENT_KEY="$$CONFIG_DIR/client_private_key.txt"
+        CLIENT_PUB="$$CONFIG_DIR/client_public_key.txt"
+
+        mkdir -p "$$CONFIG_DIR"
+        mkdir -p /etc/wireguard
+        ln -sf "$$SERVER_CONF" /etc/wireguard/wg0.conf
+
+        if [ ! -s "$$SERVER_KEY" ] || [ ! -s "$$CLIENT_KEY" ]; then
+            echo "[*] Generating fresh unique AmneziaWG cryptographic keys..."
+            if [ -n "$$WG_BIN" ]; then
+                S_PRIV="$$("$$WG_BIN" genkey)"
+                S_PUB="$$(echo "$$S_PRIV" | "$$WG_BIN" pubkey)"
+                C_PRIV="$$("$$WG_BIN" genkey)"
+                C_PUB="$$(echo "$$C_PRIV" | "$$WG_BIN" pubkey)"
+            fi
+
+            echo "$$S_PRIV" > "$$SERVER_KEY"
+            echo "$$S_PUB" > "$$SERVER_PUB"
+            echo "$$C_PRIV" > "$$CLIENT_KEY"
+            echo "$$C_PUB" > "$$CLIENT_PUB"
+        else
+            S_PRIV="$$(cat "$$SERVER_KEY")"
+            S_PUB="$$(cat "$$SERVER_PUB")"
+            C_PRIV="$$(cat "$$CLIENT_KEY")"
+            C_PUB="$$(cat "$$CLIENT_PUB")"
+        fi
+
+        PUB_IP="$$(wget -qO- -T 3 https://api.ipify.org 2>/dev/null || wget -qO- -T 3 https://icanhazip.com 2>/dev/null || ip -4 route get 1.1.1.1 2>/dev/null | awk '{print $$7; exit}' || echo 'YOUR_SERVER_IP')"
+        DEFAULT_IF="$$(ip -4 route show default 2>/dev/null | awk '{print $$5}' | head -n1)"
+        DEFAULT_IF="$${DEFAULT_IF:-eth0}"
+        LISTEN_PORT="$${LISTEN_PORT:-51820}"
+
+        cat << SERVER_EOF > "$$SERVER_CONF"
+        [Interface]
+        Address = 10.13.13.1/24
+        ListenPort = $$LISTEN_PORT
+        PrivateKey = $$S_PRIV
+        Jc = 8
+        Jmin = 75
+        Jmax = 101
+        S1 = 88
+        S2 = 119
+        H1 = 234186206
+        H2 = 969072416
+        H3 = 1204011079
+        H4 = 2067328887
+        PostUp = (iptables -A FORWARD -i %i -j ACCEPT 2>/dev/null || true); (iptables -A FORWARD -o %i -j ACCEPT 2>/dev/null || true); (iptables -t nat -A POSTROUTING -o $$DEFAULT_IF -j MASQUERADE 2>/dev/null || true)
+        PostDown = (iptables -D FORWARD -i %i -j ACCEPT 2>/dev/null || true); (iptables -D FORWARD -o %i -j ACCEPT 2>/dev/null || true); (iptables -t nat -D POSTROUTING -o $$DEFAULT_IF -j MASQUERADE 2>/dev/null || true)
+
+        [Peer]
+        PublicKey = $$C_PUB
+        AllowedIPs = 10.13.13.2/32
+        SERVER_EOF
+
+        cat << CLIENT_EOF > "$$CLIENT_CONF"
+        [Interface]
+        Address = 10.13.13.2/24
+        DNS = 1.1.1.1, 8.8.8.8
+        MTU = 1280
+        Jc = 8
+        Jmin = 75
+        Jmax = 101
+        S1 = 88
+        S2 = 119
+        H1 = 234186206
+        H2 = 969072416
+        H3 = 1204011079
+        H4 = 2067328887
+        PrivateKey = $$C_PRIV
+
+        [Peer]
+        Endpoint = $$PUB_IP:$$LISTEN_PORT
+        AllowedIPs = 0.0.0.0/0
+        PublicKey = $$S_PUB
+        PersistentKeepalive = 25
+        CLIENT_EOF
+
+        chmod -R 755 "$$CONFIG_DIR" 2>/dev/null || true
+        chmod 600 "$$SERVER_CONF" "$$SERVER_KEY" "$$CLIENT_KEY" 2>/dev/null || true
+        chmod 644 "$$CLIENT_CONF" "$$SERVER_PUB" "$$CLIENT_PUB" 2>/dev/null || true
+
+        echo "========================================================================="
+        echo "[+] AmneziaWG UDP is UP & RUNNING!"
+        echo "[-] Protocol:      Pure UDP"
+        echo "[-] Port:          $$LISTEN_PORT / UDP"
+        echo "[-] Timezone:      $$TZ (Iran/Tehran)"
+        echo "[-] Host Folder:   /opt/amneziawg/"
+        echo "[-] Client Config: /opt/amneziawg/client.conf"
+        echo "========================================================================="
+        echo "[+] COPY & PASTE THIS CONFIG INTO WG TUNNEL:"
+        echo ""
+        cat "$$CLIENT_CONF"
+        echo ""
+        echo "========================================================================="
+
+        finish() {
+            echo "[*] Shutting down AmneziaWG..."
+            if [ -n "$$WG_QUICK_BIN" ]; then
+                "$$WG_QUICK_BIN" down "$$SERVER_CONF" 2>/dev/null || "$$WG_QUICK_BIN" down wg0 2>/dev/null || true
+            fi
+            ip link delete wg0 2>/dev/null || true
+            exit 0
+        }
+        trap finish SIGTERM SIGINT SIGHUP
+
+        if [ -n "$$WG_QUICK_BIN" ]; then
+            "$$WG_QUICK_BIN" down "$$SERVER_CONF" 2>/dev/null || "$$WG_QUICK_BIN" down wg0 2>/dev/null || true
+        fi
+        ip link delete wg0 2>/dev/null || true
+
+        if [ -n "$$WG_QUICK_BIN" ]; then
+            "$$WG_QUICK_BIN" up "$$SERVER_CONF" || "$$WG_QUICK_BIN" up wg0
+        else
+            echo "ERROR: Neither awg-quick nor wg-quick found!" >&2
+            exit 1
+        fi
+
+        echo "[*] AmneziaWG active on UDP $$LISTEN_PORT. Listening for peers..."
+        while true; do
+            sleep 3600 &
+            wait $$!
+        done

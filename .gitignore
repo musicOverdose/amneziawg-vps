@@ -1,0 +1,10 @@
+# Secrets and environment
+*.key
+*.pem
+.env
+*.local
+
+# Logs and scratch
+*.log
+scratch/
+.system_generated/
