@@ -83,6 +83,11 @@ services:
             fi
         done
 
+        # Silence benign userspace kernel warning banner from wireguard-go
+        printf '#!/bin/bash\nwireguard-go "$$@" 2>&1 | grep -v -E "Running wireguard-go|kernel has first class|wireguard.com|[┌│└]"\nexit $${PIPESTATUS[0]}\n' > /usr/local/bin/wireguard-go-quiet
+        chmod +x /usr/local/bin/wireguard-go-quiet
+        export WG_QUICK_USERSPACE_IMPLEMENTATION=/usr/local/bin/wireguard-go-quiet
+
         CONFIG_DIR="/etc/amnezia/amneziawg"
         SERVER_CONF="$$CONFIG_DIR/wg0.conf"
         CLIENT_CONF="$$CONFIG_DIR/client.conf"
