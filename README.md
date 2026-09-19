@@ -113,7 +113,7 @@ docker logs -f amneziawg
 ```ini
 [Interface]
 Address = 10.13.13.2/24
-DNS = 1.1.1.1, 8.8.8.8
+DNS = 1.1.1.1, 8.8.8.8, 9.9.9.9
 MTU = 1280
 Jc = 8
 Jmin = 75
