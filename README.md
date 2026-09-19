@@ -131,7 +131,7 @@ PrivateKey = <YOUR_CLIENT_PRIVATE_KEY>
 Endpoint = YOUR_SERVER_IP:51820
 AllowedIPs = 0.0.0.0/0
 PublicKey = <YOUR_SERVER_PUBLIC_KEY>
-PersistentKeepalive = 25
+PersistentKeepalive = 15
 ```
 
 ### Mobile Optimization Notes:
