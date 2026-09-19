@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Made_by-Farzad_(@MusicOverdose)-indigo?style=for-the-badge" alt="Made by Farzad" />
   <img src="https://img.shields.io/badge/Linux-Universal-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Linux" />
   <img src="https://img.shields.io/badge/Docker-Compatible-2496ED?style=for-the-badge&logo=docker&logoColor=white" alt="Docker" />
-  <img src="https://img.shields.io/badge/Protocol-AmneziaWG_UDP_443-blueviolet?style=for-the-badge" alt="AmneziaWG" />
+  <img src="https://img.shields.io/badge/Protocol-AmneziaWG_UDP_51820-blueviolet?style=for-the-badge" alt="AmneziaWG" />
   <img src="https://img.shields.io/badge/Timezone-Asia%2FTehran-red?style=for-the-badge" alt="Asia/Tehran" />
   <img src="https://img.shields.io/badge/License-MIT-green?style=for-the-badge" alt="License" />
 </p>
@@ -15,11 +15,10 @@
 
 A dedicated, ultra-low-latency **AmneziaWG (UDP)** VPN server engineered specifically to bypass aggressive Deep Packet Inspection (DPI) and protocol-specific throttling across restricted networks and restrictive ISPs in Iran.
 
-- **QUIC / HTTP3 Masquerading on Port 443 (UDP)**: Runs on UDP 443 so traffic blends in with global QUIC/HTTP3 web traffic, bypassing carrier-level port-51820 throttling.
-- **Multiport Redirection**: Automatically accepts and forwards connections from ports **443, 8443, 53, 2083, and 51820 / UDP**.
-- **Zero Fragmentation (MTU 1200)**: Clamped to 1200 MTU with TCP MSS clamping to prevent mobile carrier packet fragmentation drops.
-- **Tuned Anti-DPI Obfuscation**: Uses packet junk padding (`Jc=4`, `Jmin=40`, `Jmax=70`), message shifts (`S1=50`, `S2=50`), and customized magic headers (`H1-H4`) to disguise traffic from carrier DPI.
+- **Pure UDP on Port 51820**: Native WireGuard performance with Amnezia packet header randomization and padding.
+- **Advanced DPI Obfuscation**: Uses packet junk padding (`Jc=8`, `Jmin=75`, `Jmax=101`), message shifts (`S1=88`, `S2=119`), and customized magic headers (`H1`, `H2`, `H3`, `H4`) to disguise traffic from carrier DPI.
 - **WG Tunnel Compatible**: Pre-configured with single 32-bit integer headers for seamless 1-click import into **WG Tunnel** and **AmneziaWG** on Android.
+- **TCP MSS Clamping**: PostUp enforces MSS clamping to ensure TLS handshakes and web downloads flow smoothly without stall.
 - **Timezone**: Explicitly set to **`Asia/Tehran`** (Iran/Tehran).
 - **Auto Keypair Generation**: Generates and manages matched Curve25519 cryptographic keys on first boot.
 - **Direct Host Persistence**: All server and client configuration files are saved directly in `/opt/amneziawg/` on your VPS host hard drive.
@@ -32,8 +31,8 @@ A dedicated, ultra-low-latency **AmneziaWG (UDP)** VPN server engineered specifi
                  CLIENT DEVICE (Android / PC)
                     [WG Tunnel / AmneziaWG]
                                |
-                      Pure UDP (Port 443 / QUIC)
-         [Obfuscated Handshake: Jc=4 + S1/S2 + H1-H4 | MTU 1200]
+                      Pure UDP (Port 51820)
+         [Obfuscated Handshake: Jc=8 + S1/S2 + H1-H4 | MTU 1280]
                                |
                   Restrictive ISP / DPI Gateway
                                |
@@ -42,10 +41,9 @@ A dedicated, ultra-low-latency **AmneziaWG (UDP)** VPN server engineered specifi
 |                  Timezone: Asia/Tehran                      |
 |                                                             |
 |  [Docker Container: amneziawg]                              |
-|  - UDP Primary: 443 (QUIC/HTTP3 Masquerade)                 |
-|  - Multiport Redirect: 51820, 8443, 2083, 53 / UDP          |
+|  - UDP: 51820 (Host Network Mode)                           |
 |  - IP: 10.13.13.1/24 (wg0 interface)                        |
-|  - NAT Masquerade: Host Subnet & Interface                  |
+|  - NAT Masquerade: Multi-backend (legacy + nft)             |
 |  - Host Storage: /opt/amneziawg/                            |
 +-------------------------------------------------------------+
 ```
@@ -116,13 +114,13 @@ docker logs -f amneziawg
 ```ini
 [Interface]
 Address = 10.13.13.2/24
-DNS = 8.8.8.8, 8.8.4.4, 1.1.1.1
-MTU = 1200
-Jc = 4
-Jmin = 40
-Jmax = 70
-S1 = 50
-S2 = 50
+DNS = 1.1.1.1, 8.8.8.8
+MTU = 1280
+Jc = 8
+Jmin = 75
+Jmax = 101
+S1 = 88
+S2 = 119
 H1 = 234186206
 H2 = 969072416
 H3 = 1204011079
@@ -130,25 +128,22 @@ H4 = 2067328887
 PrivateKey = <YOUR_CLIENT_PRIVATE_KEY>
 
 [Peer]
-# Port 443 (UDP) mimics HTTP/3 (QUIC) web traffic to bypass port 51820 throttling
-# Alt ports supported on same server: 8443, 53, 51820
-Endpoint = YOUR_SERVER_IP:443
+Endpoint = YOUR_SERVER_IP:51820
 AllowedIPs = 0.0.0.0/0
 PublicKey = <YOUR_SERVER_PUBLIC_KEY>
 PersistentKeepalive = 25
 ```
 
 ### Mobile Optimization Notes:
-1. **QUIC / HTTP3 Port Masquerade (Port 443 / UDP)**: ISPs in Iran (MCI, Irancell, Rightel) throttle port 51820 to 0–1 KB/s. Using UDP 443 blends in with everyday HTTPS/QUIC traffic and eliminates port-based drops.
-2. **MTU = 1200 (Zero Packet Fragmentation)**: Cellular carrier LTE encapsulation adds overhead. Setting MTU to 1200 prevents packet fragmentation, which Iranian DPI firewalls systematically discard.
-3. **Private DNS Off**: On Android, set **Settings $\rightarrow$ Network $\rightarrow$ Private DNS $\rightarrow$ Off** to prevent DNS-over-TLS (port 853) handshake timeouts.
-4. **"Fake TLS" vs AmneziaWG**: AmneziaWG is pure UDP with randomized packet header obfuscation. It does not use Fake TLS. If an ISP temporarily executes a 100% total UDP blackout across all ports, only TCP TLS protocols like VLESS REALITY will connect.
+1. **Parameter Matching**: In AmneziaWG, `S1`, `S2`, and `H1`–`H4` **must match identically** between server and client. If these do not match, the server cannot decrypt the handshake packet, resulting in a **Handshake Failure**.
+2. **Private DNS Off**: On Android, set **Settings $\rightarrow$ Network $\rightarrow$ Private DNS $\rightarrow$ Off** to prevent DNS-over-TLS (port 853) handshake timeouts.
+3. **IPv4 Only (`AllowedIPs = 0.0.0.0/0`)**: Excludes `::/0` to prevent Android `VpnService` routing deadlocks on IPv4-only tunnels.
 
 ---
 
-## 🛠️ Essential Host-Level Routing Command
+## 🛠️ Essential Host-Level Routing Command (Fixes 1 KB Downlink)
 
-To ensure the Linux host kernel instantly forwards all decrypted VPN packets to the internet:
+If your handshake succeeds but downlink is stuck at 0–1 KB, the VPS host kernel is not forwarding packets between `wg0` and the internet. Run this **once** on your VPS terminal as root:
 
 ```bash
 # Enable IPv4 packet forwarding and NAT masquerade directly on the VPS host
@@ -184,9 +179,9 @@ chmod +x audit-vps.sh
 ./audit-vps.sh
 ```
 
-To verify that AmneziaWG is listening on UDP port 443:
+To verify that AmneziaWG is listening on UDP port 51820:
 ```bash
-ss -ulpn | grep 443
+ss -ulpn | grep 51820
 ```
 
 ---
